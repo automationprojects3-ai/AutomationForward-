@@ -8,8 +8,26 @@ class Config:
     DATABASE_URI = environ.get("DATABASE_URI", "mongodb+srv://devms786178_db_user:cEtMdLjmHF5EM2Pf@cluster0.xbqyvnn.mongodb.net/?appName=Cluster0")
     DATABASE_NAME = environ.get("DATABASE_NAME", "doneforward")
     BOT_OWNER_ID = [int(x) for x in environ.get("BOT_OWNER_ID", "8909902924").split()]
-    # Force subscribe channels (Telegram channel IDs or usernames, comma separated)
-    FSUB_CHANNELS = [x.strip() for x in environ.get("FSUB_CHANNELS", "-1003330631655,-1003910364346,-1004361013010").split(",") if x.strip()]
+    # Force subscribe channels - hardcoded with title and URL
+    FSUB_CHANNEL1_ID = int(environ.get("FSUB_CHANNEL1_ID", "-1003330631655"))
+    FSUB_CHANNEL1_TITLE = "Team Cinderella"
+    FSUB_CHANNEL1_URL = "https://t.me/TeamCinderella"
+
+    FSUB_CHANNEL2_ID = int(environ.get("FSUB_CHANNEL2_ID", "-1003910364346"))
+    FSUB_CHANNEL2_TITLE = "Cinderella Reviews"
+    FSUB_CHANNEL2_URL = "https://t.me/Cinderella_Reviews"
+
+    FSUB_CHANNEL3_ID = int(environ.get("FSUB_CHANNEL3_ID", "-1004361013010"))
+    FSUB_CHANNEL3_TITLE = "Cinderella Updates"
+    FSUB_CHANNEL3_URL = "https://t.me/Cinderella_Updates"
+
+    FSUB_CHANNELS_INFO = [
+        {"id": FSUB_CHANNEL1_ID, "title": FSUB_CHANNEL1_TITLE, "url": FSUB_CHANNEL1_URL},
+        {"id": FSUB_CHANNEL2_ID, "title": FSUB_CHANNEL2_TITLE, "url": FSUB_CHANNEL2_URL},
+        {"id": FSUB_CHANNEL3_ID, "title": FSUB_CHANNEL3_TITLE, "url": FSUB_CHANNEL3_URL},
+    ]
+    # Keep FSUB_CHANNELS as list of IDs for backward compat
+    FSUB_CHANNELS = [FSUB_CHANNEL1_ID, FSUB_CHANNEL2_ID, FSUB_CHANNEL3_ID]
 
 class temp:
     BANNED_USERS = []
