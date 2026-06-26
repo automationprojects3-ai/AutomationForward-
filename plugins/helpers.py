@@ -59,33 +59,26 @@ def back_btn(data: str):
 async def check_fsub(bot: Client, user_id: int) -> list:
     """
     Returns list of channels user hasn't joined yet.
+    Uses hardcoded title and URL from Config - no API call needed for channel info.
     Each item: {"id": ..., "title": ..., "invite": ...}
     """
-    from config import Config
+    from pyrogram.enums import ChatMemberStatus
     not_joined = []
-    for ch in Config.FSUB_CHANNELS:
+    for ch in Config.FSUB_CHANNELS_INFO:
         try:
-            member = await bot.get_chat_member(ch, user_id)
-            from pyrogram.enums import ChatMemberStatus
+            member = await bot.get_chat_member(ch["id"], user_id)
             if member.status in [ChatMemberStatus.BANNED, ChatMemberStatus.LEFT]:
-                raise Exception("not joined")
-        except Exception:
-            try:
-                chat = await bot.get_chat(ch)
-                invite = f"https://t.me/{chat.username}" if chat.username else None
-                if not invite:
-                    try:
-                        link = await bot.export_chat_invite_link(ch)
-                        invite = link
-                    except Exception:
-                        invite = None
                 not_joined.append({
-                    "id": ch,
-                    "title": chat.title if hasattr(chat, "title") else str(ch),
-                    "invite": invite
+                    "id": ch["id"],
+                    "title": ch["title"],
+                    "invite": ch["url"]
                 })
-            except Exception:
-                not_joined.append({"id": ch, "title": str(ch), "invite": None})
+        except Exception:
+            not_joined.append({
+                "id": ch["id"],
+                "title": ch["title"],
+                "invite": ch["url"]
+            })
     return not_joined
 
 def fsub_markup(not_joined: list):
