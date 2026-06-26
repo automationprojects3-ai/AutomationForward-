@@ -1,0 +1,9 @@
+pyrogram==2.0.106
+TgCrypto
+motor
+pymongo
+dnspython
+aiohttp
+flask
+gunicorn
+pyrofork
