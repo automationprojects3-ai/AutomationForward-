@@ -25,9 +25,12 @@ async def get_channel_id_from_input(bot: Client, text: str, fwd_msg=None):
     Returns (chat_id, title) or (None, None)
     """
     # From forwarded message
-    if fwd_msg and fwd_msg.forward_from_chat:
-        chat = fwd_msg.forward_from_chat
-        return chat.id, chat.title or str(chat.id)
+    if fwd_msg and fwd_msg.forward_origin:
+        origin = fwd_msg.forward_origin
+        # Channel forward: origin.chat holds the source channel
+        chat = getattr(origin, "chat", None)
+        if chat:
+            return chat.id, chat.title or str(chat.id)
 
     if not text:
         return None, None

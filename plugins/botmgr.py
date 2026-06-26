@@ -69,7 +69,9 @@ async def bot_add_bot_cb(bot: Client, query: CallbackQuery):
     token = None
     # Try extracting from forwarded message from BotFather
     text_to_check = msg.text or ""
-    if msg.forward_from and str(msg.forward_from.id) == "93372553":
+    origin = msg.forward_origin if msg.forward_origin else None
+    origin_user = getattr(origin, "sender_user", None)
+    if origin_user and str(origin_user.id) == "93372553":
         match = re.search(r'\d{8,10}:[0-9A-Za-z_-]{35}', text_to_check)
         if match:
             token = match.group()
