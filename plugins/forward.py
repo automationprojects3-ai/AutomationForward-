@@ -6,11 +6,18 @@ import logging
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.errors import FloodWait, ChatWriteForbidden, ChannelInvalid
+from pyrogram.errors import FloodWait, ChatWriteForbidden, ChannelInvalid, MessageIdInvalid
 from database import db
 from config import Config, temp
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache: user_id -> Client (persistent per session)
+_fwd_clients: dict = {}
+
+# Duplicate tracking: set of (project_id_str, message_id)
+_forwarded_ids: set = set()
+_MAX_CACHE = 10000  # prevent unbounded growth
 
 
 def _message_type(message: Message) -> str:
@@ -34,25 +41,70 @@ def _passes_filter(message: Message, f: dict) -> bool:
     return f.get(mtype, True)
 
 
+async def _get_fwd_client(user_id: int, bot_data: dict) -> Client | None:
+    """Return cached client or create + start a new one."""
+    global _fwd_clients
+    if user_id in _fwd_clients:
+        cl = _fwd_clients[user_id]
+        if cl.is_connected:
+            return cl
+        # reconnect if disconnected
+        try:
+            await cl.start()
+            return cl
+        except Exception:
+            _fwd_clients.pop(user_id, None)
+
+    try:
+        if bot_data.get("is_bot"):
+            cl = Client(
+                f"fwd_{user_id}",
+                api_id=Config.API_ID,
+                api_hash=Config.API_HASH,
+                bot_token=bot_data["token"],
+                in_memory=True,
+            )
+        else:
+            cl = Client(
+                f"fwd_{user_id}",
+                api_id=Config.API_ID,
+                api_hash=Config.API_HASH,
+                session_string=bot_data["session"],
+                in_memory=True,
+            )
+        await cl.start()
+        _fwd_clients[user_id] = cl
+        return cl
+    except Exception as e:
+        logger.error(f"Could not start forwarding client for user {user_id}: {e}")
+        return None
+
+
 async def _send_message(fwd_client: Client, message: Message, dest_id: int, forward_tag: bool):
     """Copy or forward a single message to dest_id."""
     try:
         if forward_tag:
-            # Forward with tag
             await fwd_client.forward_messages(
                 chat_id=dest_id,
                 from_chat_id=message.chat.id,
-                message_ids=message.id
+                message_ids=message.id,
             )
         else:
-            # Copy without forward tag
-            await message.copy(dest_id)
+            # copy_message works for ALL types including video/document
+            await fwd_client.copy_message(
+                chat_id=dest_id,
+                from_chat_id=message.chat.id,
+                message_id=message.id,
+            )
     except FloodWait as e:
-        logger.warning(f"FloodWait {e.value}s, sleeping...")
-        await asyncio.sleep(e.value + 1)
+        wait = e.value + 1
+        logger.warning(f"FloodWait {wait}s, sleeping...")
+        await asyncio.sleep(wait)
         await _send_message(fwd_client, message, dest_id, forward_tag)
     except (ChatWriteForbidden, ChannelInvalid) as e:
         logger.error(f"Cannot write to {dest_id}: {e}")
+    except MessageIdInvalid:
+        logger.warning(f"MessageIdInvalid for msg {message.id} -> {dest_id}, skipping")
     except Exception as e:
         logger.exception(f"Error forwarding to {dest_id}: {e}")
 
@@ -63,8 +115,6 @@ async def channel_message_handler(bot: Client, message: Message):
     source_id = message.chat.id
 
     # Find all active projects with this source
-    # We do a full scan; in production you'd want an indexed query
-    # For now, search all projects efficiently
     from bson import ObjectId
     cursor = db.projects.find({"source_id": source_id, "active": True})
     projects = [p async for p in cursor]
@@ -73,56 +123,46 @@ async def channel_message_handler(bot: Client, message: Message):
         return
 
     for project in projects:
+        project_id_str = str(project["_id"])
+        dup_key = (project_id_str, message.id)
+
+        # Duplicate check
+        if dup_key in _forwarded_ids:
+            logger.debug(f"Duplicate msg {message.id} for project {project_id_str}, skipping")
+            continue
+
         user_id = project["user_id"]
         destinations = project.get("destinations", [])
         if not destinations:
             continue
 
-        # Get user's bot/userbot
-        _bot_data = await db.get_bot(user_id)
-        if not _bot_data:
+        bot_data = await db.get_bot(user_id)
+        if not bot_data:
             continue
 
         project_filters = project.get("filters") or db.default_filters()
         forward_tag = project.get("forward_tag", False)
 
-        # Check filter
         if not _passes_filter(message, project_filters):
-            logger.debug(f"Message filtered out for project {project['_id']}")
+            logger.debug(f"Message filtered out for project {project_id_str}")
             continue
 
-        # Create client for forwarding
-        try:
-            if _bot_data.get("is_bot"):
-                fwd_client = Client(
-                    f"fwd_{user_id}",
-                    api_id=Config.API_ID,
-                    api_hash=Config.API_HASH,
-                    bot_token=_bot_data["token"],
-                    in_memory=True
-                )
-            else:
-                fwd_client = Client(
-                    f"fwd_{user_id}",
-                    api_id=Config.API_ID,
-                    api_hash=Config.API_HASH,
-                    session_string=_bot_data["session"],
-                    in_memory=True
-                )
-            await fwd_client.start()
-        except Exception as e:
-            logger.error(f"Could not start forwarding client for user {user_id}: {e}")
+        fwd_client = await _get_fwd_client(user_id, bot_data)
+        if not fwd_client:
             continue
 
-        # Send to all destinations
+        # Mark as forwarded BEFORE sending to prevent race duplicate
+        _forwarded_ids.add(dup_key)
+        if len(_forwarded_ids) > _MAX_CACHE:
+            # Drop oldest half to keep memory bounded
+            old = list(_forwarded_ids)[:_MAX_CACHE // 2]
+            for k in old:
+                _forwarded_ids.discard(k)
+
+        # Send to all destinations with 2s delay between each
         for dest in destinations:
             dest_id = dest["id"]
             await _send_message(fwd_client, message, dest_id, forward_tag)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)
 
         temp.forwardings += 1
-
-        try:
-            await fwd_client.stop()
-        except Exception:
-            pass
